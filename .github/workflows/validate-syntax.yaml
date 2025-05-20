@@ -19,7 +19,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pycodestyle==2.10.0 mypy==1.0.1 boto3 'types-boto3[s3,cloudfront]'
+        pip install -r requirements.txt
+        pip install pycodestyle==2.10.0 mypy==1.0.1 'types-boto3[s3,cloudfront]'
     - name: Validate with pycodestyle
       run: |
         pycodestyle
