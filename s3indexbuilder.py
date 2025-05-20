@@ -6,7 +6,7 @@ from collections import defaultdict
 import hashlib
 import io
 import os
-from typing import Generator, Tuple
+from typing import cast, Generator, Tuple
 import uuid
 
 import boto3
@@ -21,7 +21,7 @@ def get_complete_bucket(bucket: str, prefix: str) -> Generator[dict, None, None]
     else:
         r = s3.list_objects_v2(Bucket=bucket)
     while True:
-        yield from r['Contents']
+        yield from cast(dict, r['Contents'])
         if not r['IsTruncated']:
             return
         r = s3.list_objects_v2(Bucket=bucket, ContinuationToken=r['NextContinuationToken'])
