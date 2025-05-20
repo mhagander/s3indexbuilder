@@ -93,13 +93,15 @@ if __name__ == "__main__":
         md5 = hashlib.md5(idx)
         md5h = md5.hexdigest()
         if d not in indexes:
-            if not args.quiet: print("Generate new index file in {}".format(d))
+            if not args.quiet:
+                print("Generate new index file in {}".format(d))
         elif indexes[d]['ETag'].strip('"') != md5h:
-            if not args.quiet: print("Update index file in {} (hash from {} to {})".format(
-                d,
-                indexes[d]['ETag'].strip('"'),
-                md5h,
-            ))
+            if not args.quiet:
+                print("Update index file in {} (hash from {} to {})".format(
+                    d,
+                    indexes[d]['ETag'].strip('"'),
+                    md5h,
+                ))
         else:
             continue
         s3.put_object(
@@ -125,4 +127,5 @@ if __name__ == "__main__":
                 'CallerReference': str(uuid.uuid4()),
             },
         )
-        if not args.quiet: print("Issued invalidation for {} paths".format(len(invalidations)))
+        if not args.quiet:
+            print("Issued invalidation for {} paths".format(len(invalidations)))
