@@ -87,7 +87,7 @@ if __name__ == "__main__":
     indexes, files = split_bucket_contents(args.bucket, prefix)
     fill_missing_parent_directories(files, prefix)
 
-    invalidations = []
+    invalidations = set([])
 
     for d in files.keys():
         idx = generate_index_for(files, d).encode()
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         )
 
         # Invalidations always start with a leading slash, and we need the trailing directory indicator too
-        invalidations.append('/{}/'.format(d))
+        invalidations.add('/{}/'.format(d) if d else '/')
 
     if invalidations and args.cfdistribution:
         # Issue cache invalidations to CFN
@@ -123,7 +123,7 @@ if __name__ == "__main__":
             InvalidationBatch={
                 'Paths': {
                     'Quantity': len(invalidations),
-                    'Items': invalidations,
+                    'Items': list(invalidations),
                 },
                 'CallerReference': str(uuid.uuid4()),
             },
