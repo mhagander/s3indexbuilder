@@ -89,6 +89,17 @@ if __name__ == "__main__":
 
     invalidations = set([])
 
+    # Look for and remove any extra files
+    for i in indexes.keys():
+        if i not in files:
+            key = '{}/index.html'.format(i) if i else 'index.html'
+            s3.delete_object(
+                Bucket=args.bucket,
+                Key=key,
+            )
+            print("Index removed: {}".format(key))
+            invalidations.add('/{}/'.format(i) if i else '/')
+
     for d in files.keys():
         idx = generate_index_for(files, d).encode()
         md5 = hashlib.md5(idx)
