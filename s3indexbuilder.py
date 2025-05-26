@@ -57,6 +57,7 @@ def generate_index_for(files: dict, directory: str) -> str:
     entries = [(os.path.basename(f['Key']), f['LastModified'], f['Size']) for f in files[directory]]
     entries.extend([(os.path.basename(dn), None, None) for dn in files.keys() if os.path.dirname(dn) == directory])
     s = io.StringIO()
+    s.write("<!DOCTYPE html>\n")
     s.write("<html>\n<head>\n<title>Index of {}/</title>\n".format(directory))
     s.write("<style>table {font-family: monospace;} table td { padding-right: 40px;}</style>\n")
     s.write("</head>\n<body>\n<h1>Index of {}/</h1>\n<hr>\n<table>\n".format(directory))
