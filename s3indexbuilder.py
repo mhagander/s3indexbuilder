@@ -6,6 +6,7 @@ from collections import defaultdict
 import hashlib
 import io
 import os
+import sys
 from typing import cast, Generator, Tuple
 import uuid
 
@@ -21,6 +22,8 @@ def get_complete_bucket(bucket: str, prefix: str) -> Generator[dict, None, None]
     else:
         r = s3.list_objects_v2(Bucket=bucket)
     while True:
+        if 'Contents' not in r:
+            return
         yield from cast(dict, r['Contents'])
         if not r['IsTruncated']:
             return
@@ -87,6 +90,10 @@ if __name__ == "__main__":
     prefix = args.prefix.rstrip('/') if args.prefix else ''
 
     indexes, files = split_bucket_contents(args.bucket, prefix)
+    if not files:
+        print("No files found.")
+        sys.exit(0)
+
     fill_missing_parent_directories(files, prefix)
 
     invalidations = set([])
