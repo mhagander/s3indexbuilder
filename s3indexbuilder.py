@@ -87,6 +87,10 @@ if __name__ == "__main__":
     parser.add_argument('--quiet', action='store_true', help='No status messages')
 
     args = parser.parse_args()
+
+    # Strip s3:// prefix if present, so the script can be called with or without
+    args.bucket = args.bucket.removeprefix('s3://')
+
     prefix = args.prefix.rstrip('/') if args.prefix else ''
 
     indexes, files = split_bucket_contents(args.bucket, prefix)
