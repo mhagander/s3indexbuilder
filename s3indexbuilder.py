@@ -4,10 +4,12 @@ import argparse
 import base64
 from collections import defaultdict
 import hashlib
+import html
 import io
 import os
 import sys
-from typing import cast, Generator, Tuple
+from typing import cast, Generator, List, Tuple
+import urllib.parse
 import uuid
 
 import boto3
@@ -15,62 +17,77 @@ import boto3
 s3 = boto3.client('s3')
 cloudfront = boto3.client('cloudfront')
 
+# CloudFront accepts at most this many paths in a single invalidation
+MAX_INVALIDATION_PATHS = 3000
+
 
 def get_complete_bucket(bucket: str, prefix: str) -> Generator[dict, None, None]:
-    if prefix:
-        r = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
-    else:
-        r = s3.list_objects_v2(Bucket=bucket)
-    while True:
-        if 'Contents' not in r:
-            return
-        yield from cast(dict, r['Contents'])
-        if not r['IsTruncated']:
-            return
-        r = s3.list_objects_v2(Bucket=bucket, ContinuationToken=r['NextContinuationToken'])
+    for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix):
+        yield from cast(dict, page.get('Contents', []))
 
 
-def split_bucket_contents(bucket: str, prefix: str) -> Tuple[dict, dict]:
+def split_bucket_contents(bucket: str, prefix: str) -> Tuple[dict, dict, List[str]]:
     indexes = {}
-    files = defaultdict(list)
-    for o in get_complete_bucket(bucket, prefix):
+    files: dict = defaultdict(list)
+    skipped: List[str] = []
+    # List with a trailing slash, so that prefix "foo" does not also match "foobar/"
+    for o in get_complete_bucket(bucket, prefix + '/' if prefix else ''):
+        if o['Key'].startswith('/'):
+            # Keys with a leading slash have no place in the directory tree
+            # (and their index would be served at a "//" URL), so leave them be.
+            skipped.append(o['Key'])
+            continue
         (dn, fn) = os.path.split(o['Key'])
         if fn == 'index.html':
             indexes[dn] = o
+        elif fn == '':
+            # "Folder" placeholder object, as created by the S3 console. Not a
+            # file, but the directory should still get an index.
+            files.setdefault(dn, [])
         else:
             files[dn].append(o)
-    return indexes, files
+    return indexes, files, skipped
 
 
 def fill_missing_parent_directories(files: dict, prefix: str) -> None:
-    add = []
+    add: set = set()
     for k in files.keys():
         dn = os.path.dirname(k)
         while dn and dn != prefix:
-            if dn not in files and dn not in add:
-                add.append(dn)
+            if dn in files or dn in add:
+                # Already known, and so are all of its parents
+                break
+            add.add(dn)
             dn = os.path.dirname(dn)
     if prefix not in files:
-        add.append(prefix)
+        add.add(prefix)
     for k in add:
         files[k] = []
 
 
-def generate_index_for(files: dict, directory: str) -> str:
+def get_subdirectories(files: dict) -> dict:
+    subdirs: dict = defaultdict(list)
+    for dn in files.keys():
+        if dn != '':
+            subdirs[os.path.dirname(dn)].append(os.path.basename(dn))
+    return subdirs
+
+
+def generate_index_for(files: dict, subdirs: dict, directory: str) -> str:
     entries = [(os.path.basename(f['Key']), f['LastModified'], f['Size']) for f in files[directory]]
-    entries.extend([(os.path.basename(dn), None, None)
-                    for dn in files.keys()
-                    if dn != '' and os.path.dirname(dn) == directory])
+    entries.extend([(name, None, None) for name in subdirs.get(directory, [])])
     s = io.StringIO()
     s.write("<!DOCTYPE html>\n")
-    s.write("<html>\n<head>\n<title>Index of {}/</title>\n".format(directory))
+    s.write("<html>\n<head>\n<title>Index of {}/</title>\n".format(html.escape(directory)))
     s.write("<style>table {font-family: monospace;} table td { padding-right: 40px;}</style>\n")
-    s.write("</head>\n<body>\n<h1>Index of {}/</h1>\n<hr>\n<table>\n".format(directory))
+    s.write("</head>\n<body>\n<h1>Index of {}/</h1>\n<hr>\n<table>\n".format(html.escape(directory)))
     if directory != '':
         s.write("<tr><td><a href=\"../\">../</a></td><td></td><td></td></tr>\n")
     for name, date, size in sorted(entries, key=lambda x: x[0]):
-        s.write("<tr><td><a href=\"{0}\">{0}</a></td><td>{1}</td><td>{2}</td></tr>\n".format(
-            name + ('/' if size is None else ''),
+        name += '/' if size is None else ''
+        s.write("<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td>{}</td></tr>\n".format(
+            urllib.parse.quote(name),
+            html.escape(name),
             date.strftime("%d-%b-%Y %H:%M") if date is not None else '',
             size if size is not None else '',
         ))
@@ -93,12 +110,17 @@ if __name__ == "__main__":
 
     prefix = args.prefix.rstrip('/') if args.prefix else ''
 
-    indexes, files = split_bucket_contents(args.bucket, prefix)
-    if not files:
-        print("No files found.")
-        sys.exit(0)
-
-    fill_missing_parent_directories(files, prefix)
+    indexes, files, skipped = split_bucket_contents(args.bucket, prefix)
+    if skipped:
+        # Shown even with --quiet, as these objects never get indexed
+        print("WARNING: skipped {} objects whose key starts with a slash, e.g. {}".format(
+            len(skipped), skipped[0]), file=sys.stderr)
+    if files:
+        fill_missing_parent_directories(files, prefix)
+    else:
+        # Nothing to index, but there can still be old index files to remove
+        if not args.quiet:
+            print("No files found.")
 
     invalidations = set([])
 
@@ -110,11 +132,13 @@ if __name__ == "__main__":
                 Bucket=args.bucket,
                 Key=key,
             )
-            print("Index removed: {}".format(key))
+            if not args.quiet:
+                print("Index removed: {}".format(key))
             invalidations.add('/{}/'.format(i) if i else '/')
 
+    subdirs = get_subdirectories(files)
     for d in files.keys():
-        idx = generate_index_for(files, d).encode()
+        idx = generate_index_for(files, subdirs, d).encode()
         md5 = hashlib.md5(idx)
         md5h = md5.hexdigest()
         if d not in indexes:
@@ -134,23 +158,31 @@ if __name__ == "__main__":
             Key='{}/index.html'.format(d) if d else 'index.html',
             Body=idx,
             ContentMD5=base64.b64encode(md5.digest()).decode(),
-            ContentType='text/html',
+            ContentType='text/html; charset=utf-8',
         )
 
         # Invalidations always start with a leading slash, and we need the trailing directory indicator too
         invalidations.add('/{}/'.format(d) if d else '/')
 
     if invalidations and args.cfdistribution:
+        paths = list(invalidations)
+        if len(paths) > MAX_INVALIDATION_PATHS:
+            # Too many for one request, so invalidate everything we operate on instead
+            paths = ['/{}/*'.format(prefix) if prefix else '/*']
+
         # Issue cache invalidations to CFN
         cloudfront.create_invalidation(
             DistributionId=args.cfdistribution,
             InvalidationBatch={
                 'Paths': {
-                    'Quantity': len(invalidations),
-                    'Items': list(invalidations),
+                    'Quantity': len(paths),
+                    'Items': paths,
                 },
                 'CallerReference': str(uuid.uuid4()),
             },
         )
         if not args.quiet:
-            print("Issued invalidation for {} paths".format(len(invalidations)))
+            if len(paths) == len(invalidations):
+                print("Issued invalidation for {} paths".format(len(paths)))
+            else:
+                print("Issued invalidation for {} ({} changed paths)".format(paths[0], len(invalidations)))
