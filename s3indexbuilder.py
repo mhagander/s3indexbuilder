@@ -4,6 +4,7 @@ import argparse
 import base64
 from collections import defaultdict
 import hashlib
+import html
 import io
 import os
 import sys
@@ -56,7 +57,7 @@ def fill_missing_parent_directories(files: dict, prefix: str) -> None:
         files[k] = []
 
 
-def generate_index_for(files: dict, directory: str) -> str:
+def generate_index_for(files: dict, directory: str, identifier: str = '') -> str:
     entries = [(os.path.basename(f['Key']), f['LastModified'], f['Size']) for f in files[directory]]
     entries.extend([(os.path.basename(dn), None, None)
                     for dn in files.keys()
@@ -65,7 +66,10 @@ def generate_index_for(files: dict, directory: str) -> str:
     s.write("<!DOCTYPE html>\n")
     s.write("<html>\n<head>\n<title>Index of {}/</title>\n".format(directory))
     s.write("<style>table {font-family: monospace;} table td { padding-right: 40px;}</style>\n")
-    s.write("</head>\n<body>\n<h1>Index of {}/</h1>\n<hr>\n<table>\n".format(directory))
+    s.write("</head>\n<body>\n<h1>Index of {}/</h1>\n".format(directory))
+    if identifier:
+        s.write("<p>{}</p>\n".format(html.escape(identifier)))
+    s.write("<hr>\n<table>\n")
     if directory != '':
         s.write("<tr><td><a href=\"../\">../</a></td><td></td><td></td></tr>\n")
     for name, date, size in sorted(entries, key=lambda x: x[0]):
@@ -85,6 +89,9 @@ if __name__ == "__main__":
     parser.add_argument('--cfdistribution', type=str,
                         help='CloudFront distribution ID to invalidate to')
     parser.add_argument('--quiet', action='store_true', help='No status messages')
+    parser.add_argument('--identifier', type=str, default='',
+                        help='Text placed at the top of the top-level index, '
+                             'e.g. a string for a monitoring check to look for')
 
     args = parser.parse_args()
 
@@ -114,7 +121,7 @@ if __name__ == "__main__":
             invalidations.add('/{}/'.format(i) if i else '/')
 
     for d in files.keys():
-        idx = generate_index_for(files, d).encode()
+        idx = generate_index_for(files, d, args.identifier if d == prefix else '').encode()
         md5 = hashlib.md5(idx)
         md5h = md5.hexdigest()
         if d not in indexes:
