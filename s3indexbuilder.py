@@ -90,7 +90,8 @@ if __name__ == "__main__":
                         help='CloudFront distribution ID to invalidate to')
     parser.add_argument('--quiet', action='store_true', help='No status messages')
     parser.add_argument('--identifier', type=str, default='',
-                        help='Text placed at the top of the top-level index, e.g. a string for a monitoring check to look for')
+                        help='Text placed at the top of the top-level index, '
+                             'e.g. a string for a monitoring check to look for')
 
     args = parser.parse_args()
 
